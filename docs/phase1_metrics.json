@@ -1,0 +1,35 @@
+{
+  "dataset": "mnist",
+  "config": {
+    "dataset": "mnist",
+    "data_dir": "./data",
+    "epochs": 5,
+    "batch_size": 128,
+    "num_hidden": 256,
+    "num_steps": 25,
+    "beta": 0.95,
+    "lr": 0.002,
+    "seed": 42,
+    "device": "cpu",
+    "results_dir": "./results",
+    "limit_batches": 0
+  },
+  "history": {
+    "train_loss": [
+      1.648655299947206,
+      1.5303640014835511,
+      1.5193036672657232,
+      1.5182914883851497,
+      1.517417743516121
+    ],
+    "test_acc": [
+      0.9328,
+      0.9379,
+      0.9489,
+      0.948,
+      0.9456
+    ]
+  },
+  "best_test_acc": 0.9489,
+  "train_seconds": 349.9
+}
