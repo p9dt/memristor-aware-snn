@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Data & artifacts
+data/
+results/*.json
+results/*.png
+*.pt
+*.pth
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+*.swp
