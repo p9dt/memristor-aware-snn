@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import time
+from pathlib import Path
 
 import torch
 import snntorch.functional as SF
@@ -31,22 +32,30 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--results-dir", default="./results")
+    p.add_argument(
+        "--limit-batches",
+        type=int,
+        default=0,
+        help="cap batches per epoch / eval (0 = use all); handy for a fast CI smoke test",
+    )
     return p.parse_args()
 
 
 @torch.no_grad()
-def evaluate(model: SpikingMLP, loader, device: str) -> float:
+def evaluate(model: SpikingMLP, loader, device: str, limit_batches: int = 0) -> float:
     """Return classification accuracy (spike-count rule) over a loader."""
     model.eval()
-    correct, total = 0, 0
-    for data, targets in loader:
+    correct, total = 0.0, 0
+    for i, (data, targets) in enumerate(loader):
+        if limit_batches and i >= limit_batches:
+            break
         data = data.view(data.size(0), -1).to(device)
         targets = targets.to(device)
         spk_rec, _ = model(data)
         # predict the class whose output neuron spiked most across time
-        correct += SF.accuracy_rate(spk_rec, targets) * targets.size(0)
+        correct += float(SF.accuracy_rate(spk_rec, targets)) * targets.size(0)
         total += targets.size(0)
-    return correct / total
+    return correct / max(total, 1)
 
 
 def main() -> None:
@@ -73,7 +82,11 @@ def main() -> None:
         model.train()
         running_loss = 0.0
         n_batches = 0
-        for data, targets in tqdm(train_loader, desc=f"epoch {epoch}/{args.epochs}"):
+        for i, (data, targets) in enumerate(
+            tqdm(train_loader, desc=f"epoch {epoch}/{args.epochs}")
+        ):
+            if args.limit_batches and i >= args.limit_batches:
+                break
             data = data.view(data.size(0), -1).to(device)
             targets = targets.to(device)
 
@@ -88,7 +101,7 @@ def main() -> None:
             n_batches += 1
 
         train_loss = running_loss / max(n_batches, 1)
-        test_acc = evaluate(model, test_loader, device)
+        test_acc = evaluate(model, test_loader, device, limit_batches=args.limit_batches)
         history["train_loss"].append(train_loss)
         history["test_acc"].append(test_acc)
         print(f"epoch {epoch}: train_loss={train_loss:.4f}  test_acc={test_acc:.4f}")
@@ -105,8 +118,26 @@ def main() -> None:
     }
     save_metrics(metrics, f"{args.results_dir}/metrics.json")
     plot_history(history, f"{args.results_dir}/training_curve.png")
+
+    # Save a reloadable checkpoint so the Phase-2 memristor comparison
+    # (`python -m src.eval_memristor`) can rebuild and load this exact model.
+    ckpt_path = Path(args.results_dir) / "model.pt"
+    torch.save(
+        {
+            "model_state": model.state_dict(),
+            "model_config": {
+                "num_inputs": 784,
+                "num_hidden": args.num_hidden,
+                "num_outputs": 10,
+                "num_steps": args.num_steps,
+                "beta": args.beta,
+            },
+        },
+        ckpt_path,
+    )
+
     print(f"\nBest test accuracy: {best_acc:.4f}")
-    print(f"Saved metrics + curve to {args.results_dir}/")
+    print(f"Saved metrics + curve + checkpoint to {args.results_dir}/")
 
 
 if __name__ == "__main__":
