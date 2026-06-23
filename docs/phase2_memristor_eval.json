@@ -1,0 +1,23 @@
+{
+  "checkpoint": "./results/model.pt",
+  "device_model": {
+    "g_min": 1.0,
+    "g_max": 100.0,
+    "num_levels": 32,
+    "weight_noise": 0.05,
+    "read_noise": 0.02
+  },
+  "trials": 5,
+  "software_acc": 0.9456,
+  "ideal_crossbar_acc": 0.9456,
+  "memristor_acc_mean": 0.93158,
+  "memristor_acc_std": 0.006851977816659951,
+  "memristor_acc_trials": [
+    0.9295,
+    0.9329,
+    0.9376,
+    0.9195,
+    0.9384
+  ],
+  "accuracy_cost_pp": 1.4020000000000032
+}

@@ -91,25 +91,35 @@ memristor-aware-snn/
 
 ## Results
 
-Numbers are populated by running the entry points above (no results are checked in).
+Reproduce with the entry points above (CPU, seed 42). Raw outputs are written to
+`results/` (git-ignored). The runs below: 5 epochs, 25 time steps, ~5.8 min train on CPU.
 
-**Phase 1 — software baseline** (`python -m src.train`)
+**Phase 1 — software baseline** (`python -m src.train --epochs 5 --num-steps 25`)
 
 | Dataset | Model | Test accuracy |
 |---------|-------|---------------|
-| MNIST   | 784–256–10 LIF SNN, 25 steps | _run `src.train` to populate_ |
+| MNIST   | 784–256–10 LIF SNN, 25 steps | **94.9%** (best, epoch 3); 94.6% final-epoch checkpoint |
 
-**Phase 2 — what the device costs** (`python -m src.eval_memristor`)
+![Phase-1 training curve](docs/training_curve.png)
+
+Full metrics: [`docs/phase1_metrics.json`](docs/phase1_metrics.json) ·
+[`docs/phase2_memristor_eval.json`](docs/phase2_memristor_eval.json).
+
+**Phase 2 — what the device costs** (`python -m src.eval_memristor --num-levels 32 --weight-noise 0.05 --read-noise 0.02 --trials 5`)
+
+Deployed model = the final-epoch checkpoint (94.56% software). Memristor row is the mean ± std
+over 5 independent device instantiations (different programming-variability draws).
 
 | Configuration | Test accuracy |
 |---------------|---------------|
-| software (float) | _run to populate_ |
-| ideal crossbar (control, should match software) | _run to populate_ |
-| memristor crossbar (32 levels, 5% write / 2% read noise) | _run to populate_ (mean ± std over device trials) |
+| software (float) | 94.56% |
+| ideal crossbar (control, non-idealities off) | 94.56% — exactly matches software ✓ |
+| memristor crossbar (32 levels, 5% write / 2% read noise) | **93.16% ± 0.69%** (5 device trials) |
 
-The headline number is the **accuracy cost** — software minus memristor accuracy, in
-percentage points. Phase 2.5 replaces the synthetic non-ideality knobs with **measured SnS₂
-device statistics** from the CSIR–NPL characterization.
+The headline number is the **accuracy cost**: software − memristor = **1.40 pp**. The ideal
+crossbar reproducing the software accuracy to the digit confirms the mapping is correct, so the
+1.40 pp drop is attributable purely to the injected device non-idealities. Phase 2.5 replaces
+these synthetic knobs with **measured SnS₂ device statistics** from the CSIR–NPL characterization.
 
 ## Background
 
