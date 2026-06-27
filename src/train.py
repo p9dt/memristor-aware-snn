@@ -1,7 +1,13 @@
-"""Train and evaluate the Phase-1 spiking baseline.
+"""Train and evaluate the spiking network.
 
-Example:
+Phase 1 (ideal synapses):
     python -m src.train --epochs 5 --num-steps 25
+
+Phase 2 (memristor-aware training):
+    python -m src.train --epochs 5 --device-preset synthetic
+
+For the naive-vs-aware comparison and the accuracy-vs-variability sweep, see
+``python -m src.experiment``.
 """
 
 from __future__ import annotations
@@ -14,12 +20,13 @@ import snntorch.functional as SF
 from tqdm import tqdm
 
 from .data import load_dataset
+from .memristor import PRESETS, DeviceConfig
 from .model import SpikingMLP
 from .utils import plot_history, save_metrics, set_seed
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Train a Phase-1 LIF SNN baseline.")
+    p = argparse.ArgumentParser(description="Train a LIF SNN (ideal or memristor-aware).")
     p.add_argument("--dataset", default="mnist")
     p.add_argument("--data-dir", default="./data")
     p.add_argument("--epochs", type=int, default=5)
@@ -31,49 +38,80 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--results-dir", default="./results")
+    # -- memristor-aware (Phase 2) --
+    p.add_argument(
+        "--device-preset",
+        default=None,
+        choices=sorted(PRESETS),
+        help="memristor device preset; omit for the ideal nn.Linear baseline.",
+    )
+    p.add_argument("--n-levels", type=int, default=None, help="override preset n_levels.")
+    p.add_argument("--sigma", type=float, default=None, help="override preset sigma.")
+    # -- fast iteration --
+    p.add_argument("--max-train-batches", type=int, default=None)
+    p.add_argument("--max-test-batches", type=int, default=None)
     return p.parse_args()
 
 
+def build_device_cfg(
+    preset: str | None,
+    n_levels: int | None = None,
+    sigma: float | None = None,
+) -> DeviceConfig | None:
+    """Resolve a DeviceConfig from a preset name + optional overrides (None = ideal baseline)."""
+    if preset is None:
+        return None
+    cfg = PRESETS[preset]
+    cfg = DeviceConfig(
+        n_levels=n_levels if n_levels is not None else cfg.n_levels,
+        sigma=sigma if sigma is not None else cfg.sigma,
+        sigma_read=cfg.sigma_read,
+        name=cfg.name,
+    )
+    return cfg
+
+
 @torch.no_grad()
-def evaluate(model: SpikingMLP, loader, device: str) -> float:
+def evaluate(model, loader, device: str, max_batches: int | None = None) -> float:
     """Return classification accuracy (spike-count rule) over a loader."""
     model.eval()
-    correct, total = 0, 0
-    for data, targets in loader:
+    correct, total = 0.0, 0
+    for i, (data, targets) in enumerate(loader):
+        if max_batches is not None and i >= max_batches:
+            break
         data = data.view(data.size(0), -1).to(device)
         targets = targets.to(device)
         spk_rec, _ = model(data)
         # predict the class whose output neuron spiked most across time
         correct += SF.accuracy_rate(spk_rec, targets) * targets.size(0)
         total += targets.size(0)
-    return correct / total
+    return correct / max(total, 1)
 
 
-def main() -> None:
-    args = parse_args()
-    set_seed(args.seed)
-    device = args.device
-    print(f"Device: {device}")
-
-    train_loader, test_loader = load_dataset(
-        args.dataset, data_dir=args.data_dir, batch_size=args.batch_size
-    )
-
-    model = SpikingMLP(
-        num_hidden=args.num_hidden, num_steps=args.num_steps, beta=args.beta
-    ).to(device)
-
+def train_model(
+    model,
+    train_loader,
+    test_loader,
+    *,
+    epochs: int,
+    lr: float,
+    device: str,
+    max_train_batches: int | None = None,
+    max_test_batches: int | None = None,
+    label: str = "",
+) -> dict:
+    """Train ``model`` end-to-end (surrogate-gradient BPTT) and return a history dict."""
     loss_fn = SF.ce_rate_loss()  # cross-entropy on output spike counts
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.999))
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, betas=(0.9, 0.999))
 
     history = {"train_loss": [], "test_acc": []}
-    start = time.time()
-
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(1, epochs + 1):
         model.train()
-        running_loss = 0.0
-        n_batches = 0
-        for data, targets in tqdm(train_loader, desc=f"epoch {epoch}/{args.epochs}"):
+        running_loss, n_batches = 0.0, 0
+        desc = f"{label + ' ' if label else ''}epoch {epoch}/{epochs}"
+        for i, (data, targets) in enumerate(tqdm(train_loader, desc=desc)):
+            if max_train_batches is not None and i >= max_train_batches:
+                break
             data = data.view(data.size(0), -1).to(device)
             targets = targets.to(device)
 
@@ -88,16 +126,50 @@ def main() -> None:
             n_batches += 1
 
         train_loss = running_loss / max(n_batches, 1)
-        test_acc = evaluate(model, test_loader, device)
+        test_acc = evaluate(model, test_loader, device, max_batches=max_test_batches)
         history["train_loss"].append(train_loss)
         history["test_acc"].append(test_acc)
-        print(f"epoch {epoch}: train_loss={train_loss:.4f}  test_acc={test_acc:.4f}")
+        print(f"{desc}: train_loss={train_loss:.4f}  test_acc={test_acc:.4f}")
+    return history
 
+
+def main() -> None:
+    args = parse_args()
+    set_seed(args.seed)
+    device = args.device
+    print(f"Device: {device}")
+
+    cfg = build_device_cfg(args.device_preset, args.n_levels, args.sigma)
+    print(f"Synapse: {'ideal nn.Linear' if cfg is None else f'memristor ({cfg})'}")
+
+    train_loader, test_loader = load_dataset(
+        args.dataset, data_dir=args.data_dir, batch_size=args.batch_size
+    )
+
+    model = SpikingMLP(
+        num_hidden=args.num_hidden,
+        num_steps=args.num_steps,
+        beta=args.beta,
+        device_cfg=cfg,
+    ).to(device)
+
+    start = time.time()
+    history = train_model(
+        model,
+        train_loader,
+        test_loader,
+        epochs=args.epochs,
+        lr=args.lr,
+        device=device,
+        max_train_batches=args.max_train_batches,
+        max_test_batches=args.max_test_batches,
+    )
     elapsed = time.time() - start
     best_acc = max(history["test_acc"]) if history["test_acc"] else 0.0
 
     metrics = {
         "dataset": args.dataset,
+        "synapse": "ideal" if cfg is None else cfg.name,
         "config": vars(args),
         "history": history,
         "best_test_acc": best_acc,

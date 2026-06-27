@@ -1,3 +1,5 @@
+# Phase 2's memristor crossbar is a self-contained, differentiable device model
+# (src/memristor.py) built on plain PyTorch -- no MemTorch dependency required.
 torch>=2.2
 torchvision>=0.17
 snntorch>=0.9

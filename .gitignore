@@ -10,6 +10,7 @@ env/
 data/
 results/*.json
 results/*.png
+results/*.log
 *.pt
 *.pth
 
